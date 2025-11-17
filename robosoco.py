@@ -1,518 +1,510 @@
-try:
-    import pandas as pd
-except ImportError:
-    print("Error importing pandas. Please install it using: pip install pandas")
-    exit(1)
+import pandas as pd
 import numpy as np
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.preprocessing import OneHotEncoder
 import random
 import os
 from time import sleep
 import datetime
-import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, classification_report
+import matplotlib.pyplot as plt # Importa o gráfico
+import tkinter as tk
+from tkinter import ttk
 
-# --- 1. GERAÇÃO DE DADOS DE CENÁRIO (AGORA COM OS 3 CENÁRIOS REAIS) ---
-def gerar_dados_de_cenario(cenario='incendio_galpao', pontos_medidos=2000, grid_largura=70):
+# --- CLASSE QUE DEFINE O CENÁRIO (O TÚNEL) --- 
+class Cenario:
     """
-    Gera um DataFrame com dados 3D, ambientais e logísticos 
-    DE FORMA CORRELACIONADA, baseado em um dos 3 cenários reais.
+    Representa o ambiente do túnel com seus perigos e vítimas.
     """
-    print(f"\n[CENÁRIO] Gerando mundo para: '{cenario}' com {pontos_medidos} pontos...")
+    def __init__(self, comprimento=500, largura=8):
+        tipo_acidente = 'linha_amarela' # Força o cenário a ser sempre este
+        print(f"--- Criando Cenário: Túnel de {comprimento}m (Acidente: {tipo_acidente.upper()}) ---")
+        self.comprimento = comprimento
+        self.largura = largura
+        self.tipo_acidente = tipo_acidente
+        self.objetos = [] 
 
-    # --- 1.1 Configurações Padrão ---
-    posicao_x = np.arange(pontos_medidos) % grid_largura
-    posicao_y = np.arange(pontos_medidos) // grid_largura
-    grid_altura = pontos_medidos // grid_largura
-    
-    vitimas_locs = []
-    risco_locs = []
-    zonas_termicas = []
-    
-    # Valores base dos gases
-    co2_base = 415.0 # Atmosférico
-    co_base = 0.0     # Monóxido de Carbono (normalmente zero)
-    metano_base = 0.0 # Metano (normalmente zero)
-    
-    gps_funciona = True
-    bateria_gasto_coef = 1.0 # Coeficiente de gasto de bateria
+        # Simulação do incêndio do ônibus na Linha Amarela
+        print("--- ATENÇÃO: Cenário especial 'Linha Amarela' ativado. ---")
+        # O ônibus pegando fogo é um grande foco de calor e um escombro
+        self.objetos.append({'tipo': 'fogo', 'x': 350, 'y': 4, 'temp': 800, 'raio': 25}) # Fogo intenso e amplo
+        self.objetos.append({'tipo': 'escombro', 'x': 350, 'y': 4, 'risco_estrutural': 3, 'raio': 10}) # Risco estrutural do ônibus
+        # Vítima crítica perto do fogo
+        self.objetos.append({'tipo': 'vitima', 'x': 355, 'y': 5, 'temp': 38.0, 'gravidade': 'critica', 'estado_vital': 'viva', 'consciencia': 'desmaiada', 'condicao': 'respirando', 'raio': 5})
+        # Vítima moderada que se afastou
+        self.objetos.append({'tipo': 'vitima', 'x': 320, 'y': 2, 'temp': 37.0, 'gravidade': 'moderada', 'estado_vital': 'viva', 'consciencia': 'acordada', 'condicao': 'em crise', 'raio': 4})
+        # --- NOVAS VÍTIMAS ADICIONADAS ---
+        # Vítima com sangramento (Prioridade Máxima)
+        self.objetos.append({'tipo': 'vitima', 'x': 150, 'y': 3, 'temp': 37.5, 'gravidade': 'grave', 'estado_vital': 'viva', 'consciencia': 'desmaiada', 'condicao': 'sangramento', 'raio': 3})
+        # Vítima com ferimentos leves (Prioridade Baixa - será ignorada pela IA)
+        self.objetos.append({'tipo': 'vitima', 'x': 450, 'y': 6, 'temp': 36.8, 'gravidade': 'leve', 'estado_vital': 'viva', 'consciencia': 'acordada', 'condicao': 'normal', 'raio': 3})
 
-    # --- 1.2 Configurações Específicas do Cenário ---
-    if cenario == 'incendio_galpao':
-        # Chão plano, fumaça tóxica, focos de calor
-        print("[CENÁRIO] Config: Galpão plano, fumaça (CO), focos de calor, risco de re-ignição.")
-        co2_base = 600.0 # Ar já viciado pela fumaça
-        co_base = 100.0  # Fumaça gera Monóxido de Carbono
-        
-        
-        num_vitimas = random.randint(1, 3) # Sorteia de 1 a 3 vítimas!
-        print(f"[CENÁRIO] Sorteando {num_vitimas} vítima(s) aleatoriamente no mapa...")
-        
-        for _ in range(num_vitimas):
-            rand_x = random.randint(5, grid_largura - 5) # Sorteia X (evitando as bordas)
-            rand_y = random.randint(5, grid_altura - 5) # Sorteia Y (evitando as bordas)
-            rand_sinal = random.randint(4500, 6000)     # Sorteia a força do sinal
+    def ler_sensores_na_posicao(self, x, y):
+        """ Simula a leitura dos sensores do robô em uma dada coordenada (x, y). """
+        dados = {'temp': 25.0, 'co2': 415, 'risco_estrutural': 0, 'vitima_detectada': None}
+
+        for obj in self.objetos:
+            dist = ((x - obj['x'])**2 + (y - obj['y'])**2)**0.5
             
-            vitimas_locs.append(
-                {'x': rand_x, 'y': rand_y, 'sinal_max': rand_sinal, 'tipo': 'bombeiro_perdido'}
-            )
+            if 'temp' in obj and dist < obj.get('raio', 10):
+                temp_adicional = (obj['temp'] - dados['temp']) * (1 - dist / obj.get('raio', 10))
+                dados['temp'] = max(dados['temp'], dados['temp'] + temp_adicional)
 
+            # Detecção de Vítima (Níveis de Gravidade)
+            if obj['tipo'] == 'vitima' and dist < obj.get('raio', 2): # Agora usa o raio configurável do objeto
+                dados['vitima_detectada'] = {
+                    'pos': (obj['x'], obj['y']), 
+                    'gravidade': obj['gravidade'],
+                    'estado_vital': obj.get('estado_vital', 'desconhecido'),
+                    'consciencia': obj.get('consciencia', 'desconhecido'),
+                    'condicao': obj.get('condicao', 'desconhecido')
+                }
 
-        zonas_termicas = [
-            {'x': 35, 'y': 45, 'temp_offset': 80, 'raio': 7}, # Foco de re-ignição
-            {'x': 5, 'y': 50, 'temp_offset': 60, 'raio': 5}   # Escombros quentes
-        ]
-        risco_locs = zonas_termicas # Risco é o calor
+            if 'risco_estrutural' in obj and dist < obj.get('raio', 10):
+                dados['risco_estrutural'] = max(dados['risco_estrutural'], obj['risco_estrutural'])
+
+        dados['temp'] = round(dados['temp'] + random.uniform(-0.5, 0.5), 1)
+        dados['co2'] += random.randint(-10, 10)
+        return dados
+
+# --- CLASSE QUE REPRESENTA O ROBÔ ---
+class Robo:
+    """
+    Representa o robô, seus sensores, estado e comunicação.
+    """
+    def __init__(self, central_controle):
+        self.pos_x = 0
+        self.pos_y = 4 
+        self.bateria = 100.0
+        self.status = "Explorando"
+        self.central_controle = central_controle 
+        self.memoria_fotos = {}
+        self.kits_primeiros_socorros = 3 # Robô começa com 3 kits
+
+    def mover(self, cenario):
+        """ Move o robô para frente, se o status permitir. """
+        if self.status != "Explorando":
+            return
+
+        if self.pos_x < cenario.comprimento:
+            self.pos_x += 1 # Avança 1 metro
+            self.bateria -= 0.1 
+        else:
+            self.status = "Fim do Túnel"
+            print("[Robô] Cheguei ao fim do túnel.")
+
+    def executar_passo_missao(self, cenario):
+        """ Um ciclo completo de operação do robô. """
+        # --- NOVA LÓGICA DE BATERIA ---
+        if self.bateria < 20 and self.status != "Retornando":
+            print("[Robô] 🔋 Bateria baixa (< 20%). Iniciando retorno à base.")
+            self.status = "Retornando"
+            # Não para a missão, apenas muda o status. A central vai lidar com isso.
+
+        if self.status == "Retornando":
+            self.pos_x -= 1 # Move para trás
+            self.bateria -= 0.1
+            if self.pos_x <= 0:
+                self.status = "Bateria Esgotada" # Sinaliza o fim da missão na base
+
+        # 1. Mover (se estiver explorando)
+        self.mover(cenario)
         
-    elif cenario == 'tunel_metro':
-        # Plano, longo, sem GPS, fumaça
-        print("[CENÁRIO] Config: Túnel longo, SEM GPS, fumaça (CO), risco de pânico.")
-        gps_funciona = False # GPS não funciona em túnel
-        co2_base = 800.0     # Ar confinado
-        co_base = 200.0      # Fumaça de curto-circuito
-        bateria_gasto_coef = 1.5 # Missão longa, gasto maior
-        # Sorteia 2-4 vítimas ao longo do túnel (y pequeno)
-        vitimas_locs = []
-        num_vitimas_tunel = random.randint(2, 4)
-        for _ in range(num_vitimas_tunel):
-            rx = random.randint(5, max(6, grid_largura - 6))
-            ry = random.randint(2, max(3, min(10, grid_altura - 1)))
-            sinal = random.randint(4000, 8000)
-            vitimas_locs.append({'x': rx, 'y': ry, 'sinal_max': sinal, 'tipo': 'passageiro'})
-        zonas_termicas = [
-            {'x': 5, 'y': 5, 'temp_offset': 50, 'raio': 10}, # Ponto do curto-circuito
-        ]
-        risco_locs = zonas_termicas
+        # 2. Ler Sensores na nova posição
+        dados_sensores = cenario.ler_sensores_na_posicao(self.pos_x, self.pos_y)
         
-   
-    elif cenario == 'vazamento_quimico':
-        # Plano, ar tóxico, risco de explosão
-        print("[CENÁRIO] Config: Fábrica plana, vazamento de gás (Metano), risco de explosão.")
-        metano_base = 200.0 # Nível de fundo
-        bateria_gasto_coef = 1.2
-        # Pode haver 0-2 vítimas aleatórias espalhadas pela planta
-        vitimas_locs = []
-        num_vitimas_quim = random.randint(0, 2)
-        for _ in range(num_vitimas_quim):
-            rx = random.randint(5, max(6, grid_largura - 6))
-            ry = random.randint(5, max(6, grid_altura - 6))
-            sinal = random.randint(5000, 7000)
-            vitimas_locs.append({'x': rx, 'y': ry, 'sinal_max': sinal, 'tipo': 'operador_desmaiado'})
-        # O "Risco" é a nuvem de metano
-   
-        risco_locs = [
-            {'x': 60, 'y': 40, 'risco_max': 4, 'raio': 20, 'sinal_gas_max': 50000} # Fonte do vazamento de metano
-        ]
-        zonas_termicas = [
-            {'x': 60, 'y': 40, 'temp_offset': -10, 'raio': 8} # Gás vazando pode ser frio
-        ]
+        # 3. Montar o pacote de dados para a central
+        pacote_dados = {
+            'timestamp': datetime.datetime.now().isoformat(),
+            'pos_x': self.pos_x,
+            'pos_y': self.pos_y, 
+            'bateria': round(self.bateria, 1),
+            'status_robo': self.status,
+            'sensores': dados_sensores
+        }
 
-    # --- 1.3 Simulação de Caminhada do Robô ---
-    current_lat, current_lon = 40.7128, -74.0060
-    current_z = 2.0 # Começa no nível do solo
-    current_roll = 0.0
-
-    lats, lons, zs, rolls = [], [], [], []
-    
-    timestamp = pd.to_datetime(pd.Series(range(pontos_medidos), name='Timestamp'), unit='s')
-
-    for i in range(pontos_medidos):
-        delta_z = np.random.normal(0, 0.05)
-        delta_roll = np.random.normal(0, 1) # Robô de rodas, pouca variação de roll
-
-        # GPS só funciona se o cenário permitir
-        if gps_funciona:
-            delta_lat = np.random.normal(0, 0.00001)
-            delta_lon = np.random.normal(0, 0.00001)
-            current_lat += delta_lat
-            current_lon += delta_lon
+        # 4. Envia dados para a central (que vai tomar a decisão)
+        comando_recebido = self.central_controle.receber_dados_robo(pacote_dados)
         
-        current_z = np.clip(current_z + delta_z, 0.1, 5.0) # Assume altura de 0 a 5m
-        current_roll = np.clip(current_roll + delta_roll, 0, 15) # Terreno plano, max 15 graus
-
-        lats.append(current_lat)
-        lons.append(current_lon)
-        zs.append(current_z)
-        rolls.append(current_roll)
-
-    latitude = np.array(lats).round(6)
-    longitude = np.array(lons).round(6)
-    profundidade_z = np.array(zs).round(1) # Na verdade é "Altura"
-    angulacao_roll = np.array(rolls).round(1)
-    
-    # --- 1.4 Simulação de Sensores (Plumes e Ruído) ---
-    df_sensores = pd.DataFrame({
-        'Posicao_X': posicao_x, 'Posicao_Y': posicao_y, 
-        'Profundidade_Z_m': profundidade_z, 'Angulacao_Roll_Graus': angulacao_roll
-    })
-    
-    # A. Vítimas (CO2)
-    df_sensores['CO2_Sinal_Vitimas'] = 0.0
-    df_sensores['Vitima_Presente_GT'] = 0 
-    for vitima in vitimas_locs:
-        dist = np.sqrt((df_sensores['Posicao_X'] - vitima['x'])**2 + (df_sensores['Posicao_Y'] - vitima['y'])**2)
-        sinal_plume = vitima['sinal_max'] / (dist**2 + 5)
-        df_sensores['CO2_Sinal_Vitimas'] += sinal_plume
-        df_sensores.loc[dist < 2.5, 'Vitima_Presente_GT'] = 1 
+        # 5. Processa o comando recebido
+        self.processar_comando(comando_recebido, pacote_dados)
         
-    ruido_co2 = np.random.normal(0, 20, pontos_medidos)
-    co2_final = (co2_base + df_sensores['CO2_Sinal_Vitimas'] + ruido_co2).astype(int)
-
-    # B. Temperatura (Base + Zonas Térmicas)
-    temp_base = 25 + (profundidade_z * 0.1) # Pouca variação
-    temp_zonas = np.zeros(pontos_medidos)
-    for zona in zonas_termicas:
-        dist = np.sqrt((df_sensores['Posicao_X'] - zona['x'])**2 + (df_sensores['Posicao_Y'] - zona['y'])**2)
-        offset = np.where(dist < zona['raio'], zona['temp_offset'] * (1 - dist / zona['raio']), 0)
-        temp_zonas += offset
-    ruido_temp = np.random.normal(0, 0.5, pontos_medidos)
-    temperatura = (temp_base + temp_zonas + ruido_temp).round(1)
-    
-    # C. Risco, CO (Monóxido) e Metano
-    df_sensores['Risco_Estrutural_Raw'] = 0.0
-    df_sensores['CO_Plume'] = 0.0
-    df_sensores['Metano_Plume'] = 0.0
-    
-    for zona in risco_locs:
-        dist = np.sqrt((df_sensores['Posicao_X'] - zona['x'])**2 + (df_sensores['Posicao_Y'] - zona['y'])**2)
-        
-        # Risco Estrutural (pode ser calor ou gás)
-        if 'risco_max' in zona:
-            risco = np.where(dist < zona['raio'], zona['risco_max'] * (1 - dist / zona['raio']), 0)
-            df_sensores['Risco_Estrutural_Raw'] = np.maximum(df_sensores['Risco_Estrutural_Raw'], risco)
-        
-        # Plume de CO (associado a 'zonas_termicas' em 'incendio' e 'tunel')
-        if cenario != 'vazamento_quimico' and 'temp_offset' in zona and zona['temp_offset'] > 40:
-             sinal_co = (zona['temp_offset'] * 10) / (dist**2 + 5) # CO proporcional ao calor
-             df_sensores['CO_Plume'] += sinal_co
-
-        # Plume de Metano (associado a 'risco_locs' em 'vazamento_quimico')
-        if cenario == 'vazamento_quimico' and 'sinal_gas_max' in zona:
-            sinal_metano = zona['sinal_gas_max'] / (dist**2 + 5)
-            df_sensores['Metano_Plume'] += sinal_metano
+        if self.status == "Bateria Esgotada":
+            return False # Encerra o loop da missão
             
-    risco_estrutura = np.clip(df_sensores['Risco_Estrutural_Raw'], 0, 4).round().astype(int)
-    co_final = (co_base + df_sensores['CO_Plume'] + np.random.normal(0, 5, pontos_medidos)).astype(int)
-    metano_final = (metano_base + df_sensores['Metano_Plume'] + np.random.normal(0, 10, pontos_medidos)).astype(int)
+        return True # Continua a missão
 
+    def processar_comando(self, comando, dados_atuais):
+        """ Executa um comando AUTOMÁTICO recebido da Central. """
+        if not comando:
+            return
 
-    # --- 1.5 Logística (Bateria com gasto dinâmico) ---
-    bateria_gasto_base = (np.arange(pontos_medidos) / pontos_medidos * 40 * bateria_gasto_coef)
-    bateria_gasto_extra = (df_sensores['Angulacao_Roll_Graus'] * 0.1) + (df_sensores['Risco_Estrutural_Raw'] * 0.2)
-    bateria_robo_perc = 100 - np.clip(bateria_gasto_base + bateria_gasto_extra, None, 99)
+        if comando['acao'] == 'REGISTRAR_FOTO_TERMICA':
+            self.status = "Registrando Foto"
+            foto_id = f"foto_termica_{self.pos_x}m"
+            conteudo_foto = {
+                "pos_x": self.pos_x,
+                "temp_max_registrada": dados_atuais['sensores']['temp'],
+                "dados_vitima": dados_atuais['sensores']['vitima_detectada']
+            }
+            self.memoria_fotos[foto_id] = conteudo_foto
+            print(f"[Robô] 📸 Foto térmica '{foto_id}' registrada com sucesso!")
+            self.central_controle.confirmar_registro_foto(foto_id, conteudo_foto)
+            self.status = "Aguardando" # Avisa a central que terminou a ação
+        
+        elif comando['acao'] == 'CONTINUAR_EXPLORACAO':
+            self.status = "Explorando"
+        
+        elif comando['acao'] == 'RETORNAR_BASE':
+            self.status = "Retornando"
+            print("[Robô] Rota de retorno iniciada.")
+        
+        elif comando['acao'] == 'MANTER_POSICAO':
+            self.status = "Aguardando"
 
-    # --- 1.6 Montagem Final do DataFrame ---
-    df = pd.DataFrame({
-        'Timestamp': timestamp,
-        'Latitude': latitude,
-        'Longitude': longitude,
-        'Posicao_X': posicao_x,
-        'Posicao_Y': posicao_y,
-        'Profundidade_Z_m': profundidade_z,
-        'Angulacao_Roll_Graus': angulacao_roll,
-        'Temp_C': temperatura,
-        'CO2_ppm': co2_final,
-        'CO_ppm': co_final,           # NOVO SENSOR
-        'Metano_ppm': metano_final,  # NOVO SENSOR
-        'Risco_Estrutural': risco_estrutura,
-        'Bateria_Robo_Perc': bateria_robo_perc.round(1),
-        'Vitima_Presente_GT': df_sensores['Vitima_Presente_GT']
-    })
+        elif comando['acao'] == 'SOLTAR_KIT_PRIMEIROS_SOCORROS':
+            self.status = "Ação Imediata"
+            if self.kits_primeiros_socorros > 0:
+                self.kits_primeiros_socorros -= 1
+                print(f"[Robô] 🩹 Kit de primeiros socorros liberado na posição {self.pos_x}m. Kits restantes: {self.kits_primeiros_socorros}.")
+            else:
+                print(f"[Robô] ⚠️ Tentativa de liberar kit, mas não há mais kits disponíveis.")
+            self.status = "Aguardando" # Avisa a central que terminou a ação
 
-    df['Tendencia_Temp_C'] = df['Temp_C'].diff().fillna(0).round(1) 
-    
-    print("[CENÁRIO] Geração de mundo concluída.")
-    return df
-
-# --- 2. TREINAMENTO DA IA (AGORA COM ML DE VERDADE) ---
-def treinar_modelo_ia(cenario_treino):
+# --- CLASSE DA CENTRAL DE CONTROLE (AUTOMÁTICA) ---
+class CentralDeControle:
     """
-    Treina um modelo de IA (Logistic Regression) para detectar vítimas
-    usando dados simulados do cenário escolhido.
+    Simula a interface do operador (TERMINAL) e a tela de rastreio (GRÁFICO)
+    AGORA EM MODO 100% AUTOMÁTICO.
     """
-    print(f"\n[IA] Treinando modelo de IA para o cenário: '{cenario_treino}'...")
-    print("[IA] Gerando 10.000 pontos de dados para treino...")
-    
-    # 1. Gerar um GRANDE dataset de treino
-    df_treino = gerar_dados_de_cenario(cenario=cenario_treino, pontos_medidos=10000)
-    
-    # 2. Definir 'features' (dados dos sensores) e 'target' (o gabarito)
-    #    AGORA INCLUINDO OS NOVOS SENSORES!
-    features = [
-        'CO2_ppm', 
-        'Temp_C', 
-        'Tendencia_Temp_C', 
-        'Profundidade_Z_m',
-        'CO_ppm',
-        'Metano_ppm'
-    ]
-    target = 'Vitima_Presente_GT' # O gabarito que a simulação criou!
+    def __init__(self):
+        self.log_missao = []
+        self.alertas = []
+        
+        # --- NOVOS Atributos da Central Automática ---
+        self.vitimas_registradas = set() # A "MEMÓRIA" das vítimas já vistas
+        self.estado_automatico = {}      # Gerencia a "sequência" de ações
+        self.missao_ativa = True         # Flag para controlar o loop principal
 
-    X = df_treino[features]
-    y = df_treino[target]
+        # --- NOVOS Atributos para o Modelo de IA ---
+        self.modelo_prioridade = None
+        self.encoder_ia = None
+        self._treinar_modelo_prioridade() # Treina o modelo na inicialização
+        
+        # --- Variáveis para o GRÁFICO ---
+        self.fig, self.ax = None, None
+        self.mapa_x, self.mapa_y = [], [] 
+        self.mapa_vitimas_x, self.mapa_vitimas_y = [], [] 
 
-    # 3. Treinar o modelo
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
-    
-    # Usamos um 'pipeline' que primeiro normaliza os dados (StandardScaler)
-    # e depois aplica a Regressão Logística. Isso é essencial!
-    modelo_ia = make_pipeline(StandardScaler(), LogisticRegression(class_weight='balanced'))
-    modelo_ia.fit(X_train, y_train)
-    
-    # 4. Checar a precisão (só pra gente saber)
-    preds = modelo_ia.predict(X_test)
-    print("\n[IA] Relatório de Classificação do Modelo (dados de teste):")
-    print(classification_report(y_test, preds))
-    print(f"[IA] Acurácia do Modelo de IA: {accuracy_score(y_test, preds) * 100:.2f}%")
-    print("[IA] Modelo treinado e pronto!")
-    
-    return modelo_ia, features # Retorna o modelo (pipe) e a lista de features
+        # --- NOVOS Atributos para a Tabela de Log (Tkinter) ---
+        self.root_log = None
+        self.tree_log = None
 
-# --- 3. PROCESSAMENTO E FUSÃO (AGORA OTIMIZADO E COM IA) ---
-def fusao_e_priorizacao_inteligente(modelo_ia, features_list, ponto_atual, ponto_anterior=None):
-    """
-    Aplica IA e regras de fusão para determinar a prioridade de UM ÚNICO PONTO.
-    Esta função é O(n), muito rápida.
-    """
-    
-    # Copia o dicionário para não mexer no original
-    ponto_processado = ponto_atual.copy()
+    def _treinar_modelo_prioridade(self):
+        """Cria e treina um modelo de IA simples para classificar a prioridade das vítimas."""
+        print("[Central IA] Treinando modelo de priorização de vítimas...")
 
-    # --- Cálculo de Tendência (baseado no ponto anterior) ---
-    if ponto_anterior is not None:
-        ponto_processado['Tendencia_Temp_C'] = round(ponto_processado['Temp_C'] - ponto_anterior['Temp_C'], 1)
-    else:
-        ponto_processado['Tendencia_Temp_C'] = 0.0
+        # Dados de treinamento sintéticos
+        # Features: [gravidade, consciencia, condicao]
+        # Target: prioridade (1: Alta, 2: Média, 3: Baixa)
+        dados_treino = [
+            ['critica', 'desmaiada', 'sangramento', 1],
+            ['grave', 'desmaiada', 'sangramento', 1],
+            ['grave', 'desmaiada', 'respirando', 1],
+            ['moderada', 'acordada', 'em crise', 2],
+            ['moderada', 'desmaiada', 'respirando', 2],
+            ['moderada', 'acordada', 'normal', 2],
+            ['leve', 'acordada', 'em crise', 2],
+            ['leve', 'acordada', 'normal', 3],
+        ]
+        df_treino = pd.DataFrame(dados_treino, columns=['gravidade', 'consciencia', 'condicao', 'prioridade'])
 
-    # --- Passo A: Previsão de Risco (Usando novos sensores) ---
-    ponto_processado['Risco_Previsto_Futuro'] = ponto_processado['Risco_Estrutural']
-    
-    # Risco de Gás/Fumaça é mais importante
-    if ponto_processado['CO_ppm'] >= 500: # Nível perigoso de Monóxido
-        ponto_processado['Risco_Previsto_Futuro'] = 4
-    elif ponto_processado['Metano_ppm'] >= 10000: # 1% de Metano (alto)
-        ponto_processado['Risco_Previsto_Futuro'] = 4
-    elif (ponto_processado['Risco_Estrutural'] >= 2) and (ponto_processado['Tendencia_Temp_C'] > 4.0):
-        ponto_processado['Risco_Previsto_Futuro'] = 4
-    
-    # --- Passo B: Cálculo de Custos de Rota (Logística) ---
-    ponto_processado['Custo_Rota'] = int(
-        (ponto_processado['Profundidade_Z_m'] * 10) + 
-        (ponto_processado['Risco_Estrutural'] * 50) + 
-        (ponto_processado['Angulacao_Roll_Graus'] * 2)
-    )
+        # Prepara os dados para o modelo (One-Hot Encoding)
+        X_cat = df_treino[['gravidade', 'consciencia', 'condicao']]
+        y = df_treino['prioridade']
 
-    # --- Passo C: Detecção de Vítimas (USANDO A IA) ---
-    
-    # 1. Prepara os dados do ponto atual no formato que o modelo espera
-    #    O pipeline foi treinado com nomes de colunas; passamos um DataFrame com esses nomes
-    dados_para_ia_df = pd.DataFrame([{feature: ponto_processado[feature] for feature in features_list}])
+        self.encoder_ia = OneHotEncoder(handle_unknown='ignore')
+        X_encoded = self.encoder_ia.fit_transform(X_cat)
 
-    # 2. Faz a predição usando o DataFrame (preserva os nomes de colunas)
-    predicao = modelo_ia.predict(dados_para_ia_df)
+        # Cria e treina o modelo (Árvore de Decisão)
+        self.modelo_prioridade = DecisionTreeClassifier(random_state=42)
+        self.modelo_prioridade.fit(X_encoded, y)
+        print("[Central IA] Modelo treinado com sucesso!")
 
-    # 3. Pega a PROBABILIDADE (confiança) da IA
-    probabilidade_vitima = modelo_ia.predict_proba(dados_para_ia_df)[0][1] # Probabilidade de ser classe "1" (Vítima)
-    
-    ponto_processado['Vitima_Detectada'] = bool(predicao[0])
-    ponto_processado['Vitima_Confianca_Perc'] = round(probabilidade_vitima * 100, 1)
+    def _prever_prioridade_vitima(self, vitima):
+        """Usa o modelo de IA para prever a prioridade de uma vítima."""
+        dados_vitima = pd.DataFrame([[vitima['gravidade'], vitima['consciencia'], vitima['condicao']]], columns=['gravidade', 'consciencia', 'condicao'])
+        dados_encoded = self.encoder_ia.transform(dados_vitima)
+        return self.modelo_prioridade.predict(dados_encoded)[0]
 
-    # --- Passo D: Fusão Final (Score baseado na CONFIANÇA da IA) ---
-    
-    # 1. CRIA os scores base (Vitima e Risco) PRIMEIRO!
-    ponto_processado['Score_Vitima'] = ponto_processado['Vitima_Confianca_Perc'] * 2.0
-    ponto_processado['Score_Risco_Estrutural'] = ponto_processado['Risco_Previsto_Futuro'] * 50
+    def _configurar_grafico(self, cenario):
+        """(Etapa 1) Cria a Janela do Gráfico"""
+        print("[Central] Abrindo janela do mapa da missão...")
+        plt.ion() 
+        plt.close(1) # Força o fechamento da "Figura 1" fantasma, se existir
+        self.fig, self.ax = plt.subplots(figsize=(10, 8))
+        self.ax.set_xlim(0, cenario.comprimento)
+        self.ax.set_ylim(0, cenario.largura + 2) 
+        
+    def _atualizar_grafico(self, pacote_dados, alerta_vitima=False):
+        """(Etapa 2) Atualiza o Gráfico em Tempo Real"""
+        x_atual = pacote_dados['pos_x']
+        y_atual = pacote_dados['pos_y']
+        bateria = pacote_dados['bateria']
+        status = pacote_dados['status_robo']
 
-    # 2. Agora sim, CALCULA o Score Bruto (usando os scores de cima)
-    score_bruto = (
-        (ponto_processado['Score_Vitima'] * 0.70) + 
-        (ponto_processado['Score_Risco_Estrutural'] * 0.20) +
-        (ponto_processado['Angulacao_Roll_Graus'] * 0.05) +
-        (np.clip(ponto_processado['Tendencia_Temp_C'], None, 5) * 0.05)
-    )
+        self.mapa_x.append(x_atual)
+        self.mapa_y.append(y_atual)
+        if alerta_vitima:
+            self.mapa_vitimas_x.append(x_atual)
+            self.mapa_vitimas_y.append(y_atual)
 
-    # 3. Adiciona o "Ruído de Atividade" (pra nunca ficar 0)
-    ruido_de_atividade = random.randint(1, 200) 
+        self.ax.clear() 
+        
+        self.ax.plot(self.mapa_x, self.mapa_y, '.-', color='gray', alpha=0.5, label='Caminho Percorrido')
+        self.ax.plot(x_atual, y_atual, 'o', color='blue', markersize=10, label=f'Posição Atual Robô ({status})')
+        if self.mapa_vitimas_x:
+            self.ax.plot(self.mapa_vitimas_x, self.mapa_vitimas_y, 'X', color='red', markersize=15, label='Vítima Detectada')
 
-    # 4. Soma o ruído e converte pra int
-    ponto_processado['Prioridade_Resgate'] = int(score_bruto + ruido_de_atividade)
-    
-    # --- Passo E: Decisão Logística (Comandos com novos riscos) ---
-    ponto_processado['Comando_Logistico'] = 'CONTINUAR EXPLORACAO'
-    
-    # 1. Risco de Explosão (Prioridade Máxima)
-    if ponto_processado['Metano_ppm'] >= 25000: # 2.5% LEL (Limite Inferior de Explosividade)
-        ponto_processado['Comando_Logistico'] = '!!! EVACUAR IMEDIATAMENTE (RISCO DE EXPLOSÃO) !!!'
-    # 2. Risco de Asfixia (CO)
-    elif ponto_processado['CO_ppm'] >= 800:
-        ponto_processado['Comando_Logistico'] = 'RETIRADA (NÍVEL DE CO PERIGOSO PARA O ROBÔ)'
-    # 3. Bateria
-    elif ponto_processado['Bateria_Robo_Perc'] < 30:
-        ponto_processado['Comando_Logistico'] = 'RETORNAR A BASE (BAIXA BATERIA)'
-    # 4. Detecção de Vítima (pela IA)
-    elif ponto_processado['Vitima_Detectada'] == True and ponto_processado['Vitima_Confianca_Perc'] > 70:
-        ponto_processado['Comando_Logistico'] = 'INICIAR RESGATE (ALTA CONFIANÇA DA IA)'
-    # 5. Risco Estrutural (sem vítima)
-    elif (ponto_processado['Comando_Logistico'] == 'CONTINUAR EXPLORACAO') and (ponto_processado['Risco_Previsto_Futuro'] == 4):
-        ponto_processado['Comando_Logistico'] = 'RETIRADA (RISCO ESTRUTURAL PREVISTO)'
-           
-    return ponto_processado
+        self.ax.set_title(f"MAPA DA MISSÃO: TÚNEL (Ponto {x_atual}m) | Bateria: {bateria:.0f}%")
+        self.ax.legend(loc='upper left')
+        self.ax.set_xlim(0, 500) 
+        self.ax.set_ylim(0, 10)  
+        
+        plt.pause(0.001) 
 
-# --- 4. EXECUÇÃO PRINCIPAL (COM TUDO INTEGRADO) ---
+    def _configurar_tabela_log(self):
+        """(Etapa 1.B) Cria a janela e a tabela para o log de comunicação."""
+        print("[Central] Abrindo janela de log de comunicação...")
+        self.root_log = tk.Tk()
+        self.root_log.title("Log de Comunicação - Central RoboSoco")
+        self.root_log.geometry("900x400")
+
+        # Cria o frame e a scrollbar
+        frame = ttk.Frame(self.root_log)
+        frame.pack(fill=tk.BOTH, expand=True)
+        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL)
+
+        # Cria a tabela (TreeView)
+        self.tree_log = ttk.Treeview(frame, columns=("Timestamp", "Fonte", "Mensagem", "Ação IA"), show='headings', yscrollcommand=scrollbar.set)
+        scrollbar.config(command=self.tree_log.yview)
+
+        # Define os cabeçalhos
+        self.tree_log.heading("Timestamp", text="Timestamp")
+        self.tree_log.heading("Fonte", text="Fonte")
+        self.tree_log.heading("Mensagem", text="Mensagem Recebida / Status")
+        self.tree_log.heading("Ação IA", text="Comando Enviado pela IA")
+
+        # Ajusta as colunas
+        self.tree_log.column("Timestamp", width=160, anchor='w')
+        self.tree_log.column("Fonte", width=80, anchor='center')
+        self.tree_log.column("Mensagem", width=400, anchor='w')
+        self.tree_log.column("Ação IA", width=200, anchor='w')
+
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree_log.pack(fill=tk.BOTH, expand=True)
+
+        # Adiciona um manipulador para o evento de fechar a janela
+        self.root_log.protocol("WM_DELETE_WINDOW", self._on_closing_log_window)
+
+    def iniciar_missao(self, robo, cenario):
+        """Inicia a missão, ligando o GRÁFICO e o TERMINAL"""
+        
+        #self._configurar_grafico(cenario) # LIGA A JANELA DO GRÁFICO
+        
+        self._configurar_grafico(cenario)    # LIGA A JANELA DO GRÁFICO
+        self._configurar_tabela_log()        # LIGA A JANELA DA TABELA
+        print("\n=======================================================")
+        print(" 🤖      CENTRAL DE CONTROLE ROBOSOCO 5001      🤖")
+        print("         (MISSÃO EM MODO 100% AUTOMÁTICO)")
+        print("=======================================================")
+        print(f"Iniciando missão no cenário: {cenario.tipo_acidente.upper()} no túnel.")
+        
+        # Loop principal da missão
+        while self.missao_ativa and robo.executar_passo_missao(cenario):
+            sleep(0.54) # Pausa para simular tempo real (4.5 min total)
+            self.root_log.update() # Atualiza a janela da tabela
+            if robo.status == "Bateria Esgotada":
+                break
+        
+        # --- FIM DA MISSÃO ---
+        print("\n=======================================================")
+        print(" 🏁                MISSÃO ENCERRADA                🏁")
+        print("=======================================================")
+        print(f"Relatório final: {len(self.log_missao)} pacotes de dados recebidos.")
+        fotos_tiradas = [log for log in self.log_missao if 'confirmacao_foto' in log]
+        if fotos_tiradas:
+            print("\n--- Fotos Térmicas Registradas ---")
+            for foto_log in fotos_tiradas:
+                foto_id = foto_log['confirmacao_foto']['id']
+                dados_foto = foto_log['confirmacao_foto']['dados']
+                print(f"  - {foto_id}: Temp Max: {dados_foto['temp_max_registrada']}°C, Vítima: {dados_foto['dados_vitima']}")
+        
+        # (Etapa 3) Visualização Final
+        plt.ioff()
+        print("\nVisualização final do mapa da missão. Pode fechar a janela do gráfico.")
+        plt.show() 
+
+    def _on_closing_log_window(self):
+        """Chamado quando a janela de log é fechada pelo usuário."""
+        print("[Central] Janela de log fechada. Encerrando a missão...")
+        self.missao_ativa = False # Sinaliza para o loop principal parar
+        if self.root_log:
+            self.root_log.destroy()
+            self.root_log = None
+
+    def _adicionar_log_tabela(self, fonte, mensagem, acao_ia=""):
+        """Adiciona uma nova entrada na tabela de log."""
+        # Verifica se a janela/tabela ainda existem antes de tentar inserir
+        if self.root_log and self.tree_log:
+            timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+            self.tree_log.insert("", tk.END, values=(timestamp, fonte, mensagem, acao_ia))
+            self.tree_log.yview_moveto(1) # Auto-scroll para o final
+
+    def receber_dados_robo(self, pacote_dados):
+        """ 
+        ESTA É A NOVA CENTRAL AUTOMÁTICA.
+        Ela recebe dados e decide o que fazer.
+        """
+        
+        # --- 1. Extrai Dados do Pacote ---
+        pos_x = pacote_dados['pos_x']
+        bateria = pacote_dados['bateria']
+        status = pacote_dados['status_robo']
+        sensores = pacote_dados['sensores']
+        temp = sensores['temp']
+        vitima = sensores['vitima_detectada']
+        risco = sensores['risco_estrutural']
+
+        alerta_vitima_grafico = False # Flag para desenhar o 'X'
+        comando_final = None          # Comando a ser enviado ao robô
+        mensagem_log = f"Ponto {pos_x}m | Bat: {bateria}% | Status: {status} | Temp: {temp}°C"
+        acao_log = ""
+
+        # --- 2. Lógica de Risco Imediato (IGNORA TODO O RESTO) ---
+        if risco > 3:
+            print(f"  🚧 ALERTA ESTRUTURAL (Nível {risco})! Acionando RETORNO AUTOMÁTICO.")
+            msg = f"ALERTA ESTRUTURAL (Nível {risco})! Acionando RETORNO AUTOMÁTICO."
+            self._adicionar_log_tabela("IA Central", msg, "RETORNAR_BASE")
+            comando_final = {'acao': 'RETORNAR_BASE'}
+        elif temp > 1000: # Limite de temperatura aumentado para ignorar o fogo e completar a missão
+            msg = f"ALERTA DE TEMPERATURA ({temp}°C)! Acionando RETORNO AUTOMÁTICO."
+            self._adicionar_log_tabela("IA Central", msg, "RETORNAR_BASE")
+            comando_final = {'acao': 'RETORNAR_BASE'}
+        elif status == "Retornando":
+            # Se o robô já está voltando (por bateria baixa ou comando), a central só monitora.
+            mensagem_log = f"🔋 RETORNANDO À BASE | Ponto {pos_x}m | Bat: {bateria}%"
+            acao_log = "MONITORANDO RETORNO"
+            # Nenhum comando novo é necessário
+        
+        if comando_final: # Se um comando de risco foi dado, pule o resto
+            return comando_final
+        # --- 3. Lógica de Sequência Automática (SE NÃO HÁ RISCO IMEDIATO) ---
+        elif status == "Aguardando":
+            # O Robô está parado, esperando o *próximo passo* da sequência.
+            if self.estado_automatico.get('em_sequencia') == True:
+                proximo_passo = self.estado_automatico.get('proximo_passo')
+                if proximo_passo:
+                    print(f"[Central Automática] Ação anterior concluída. Executando próximo passo: {proximo_passo.get('acao')}")
+                    comando_final = {'acao': proximo_passo.get('acao')}
+                    # Atualiza a sequência para o passo seguinte, se houver
+                    self.estado_automatico['proximo_passo'] = proximo_passo.get('proximo_passo')
+                else:
+                    self.estado_automatico = {} # A sequência terminou, limpa o estado
+            
+        elif status == "Explorando":
+            # O Robô está andando, procurando por NOVOS alertas.
+            if vitima:
+                pos_tuple = tuple(vitima['pos'])
+                
+                # Checa a "MEMÓRIA"
+                if pos_tuple not in self.vitimas_registradas:
+                    # --- VÍTIMA NOVA ENCONTRADA! ---
+                    self.vitimas_registradas.add(pos_tuple) # Adiciona na memória
+                    alerta_vitima_grafico = True # Manda o gráfico desenhar o 'X'
+                    condicao_vitima = f"Estado: {vitima['estado_vital']}, {vitima['consciencia']}, {vitima['condicao']}"
+                    
+                    distancia = pos_x
+                    tempo_chegada_min = round(distancia / 50) 
+
+                    # Usa o modelo de IA para definir a prioridade
+                    prioridade = self._prever_prioridade_vitima(vitima)
+
+                    if prioridade == 1: # Prioridade Alta
+                        print(f"  🚨 ALERTA DE VÍTIMA (PRIORIDADE ALTA) NO PONTO {pos_x}m!")
+                        print(f"     Detalhes: {condicao_vitima}")
+                        print(f"     Acionando Sequência: [KIT PRIMEIROS SOCORROS] -> [FOTO] -> [CONTINUAR]")
+                        print(f"     Equipe de socorro chegará em {tempo_chegada_min} min.")
+                        mensagem_log = f"🚨 VÍTIMA (PRIORIDADE ALTA) em {pos_x}m. Detalhes: {condicao_vitima}"
+                        acao_log = "SOLTAR_KIT -> FOTO -> CONTINUAR"
+                        self._adicionar_log_tabela("IA Central", f"Equipe de socorro chegará em {tempo_chegada_min} min.", "")
+
+                        # Define a sequência de ações
+                        passo2 = {'acao': 'REGISTRAR_FOTO_TERMICA'}
+                        passo3 = {'acao': 'CONTINUAR_EXPLORACAO'}
+                        passo2['proximo_passo'] = passo3 # Aninha o passo 3 dentro do passo 2
+                        self.estado_automatico = {'em_sequencia': True, 'proximo_passo': passo2}
+                        comando_final = {'acao': 'SOLTAR_KIT_PRIMEIROS_SOCORROS'}
+
+                        if vitima['condicao'] == 'sangramento':
+                            print("     PRIORIDADE MÁXIMA: Vítima com sangramento detectado!")
+                            self._adicionar_log_tabela("IA Central", "PRIORIDADE MÁXIMA: Vítima com sangramento detectado!", "")
+                        
+                    elif prioridade == 2: # Prioridade Média
+                        print(f"  ⚠️ ALERTA DE VÍTIMA (PRIORIDADE MÉDIA) NO PONTO {pos_x}m.")
+                        print(f"     Detalhes: {condicao_vitima}")
+                        print(f"     Acionando Sequência: [FOTO] -> [CONTINUAR EXPLORANDO]")
+                        print(f"     Equipe de socorro chegará em {tempo_chegada_min} min.")
+                        mensagem_log = f"⚠️ VÍTIMA (PRIORIDADE MÉDIA) em {pos_x}m. Detalhes: {condicao_vitima}"
+                        acao_log = "FOTO -> CONTINUAR"
+                        self._adicionar_log_tabela("IA Central", f"Equipe de socorro chegará em {tempo_chegada_min} min.", "")
+
+                        # Define a sequência: FOTO e depois CONTINUAR
+                        passo2 = {'acao': 'CONTINUAR_EXPLORACAO'}
+                        self.estado_automatico = {'em_sequencia': True, 'proximo_passo': passo2}
+                        comando_final = {'acao': 'REGISTRAR_FOTO_TERMICA'}
+                
+                else:
+                    # Se a vítima já está na memória
+                    print(f"[Central] Passando por vítima já registrada em {pos_tuple}...")
+                    mensagem_log = f"Passando por vítima já registrada em {pos_tuple}."
+                    
+            elif status == "Fim do Túnel":
+                print(f"  🏁 INFO: Robô chegou ao fim dos {pos_x}m do túnel.")
+                mensagem_log = f"🏁 Robô chegou ao fim dos {pos_x}m do túnel."
+                acao_log = "MANTER_POSICAO"
+                comando_final = {'acao': 'MANTER_POSICAO'}
+                
+        # --- 4. Atualiza o Gráfico e Envia o Comando ---
+        self._atualizar_grafico(pacote_dados, alerta_vitima=alerta_vitima_grafico)
+        
+        # Imprime o status básico (para não poluir)
+        if not alerta_vitima_grafico and status == "Explorando" and comando_final is None:
+             print(f"[Central] Ponto {pos_x}m | Bat: {bateria}% | Status: {status} | Temp: {temp}°C")
+
+        # Adiciona a linha de log na tabela
+        if not acao_log:
+            acao_log = comando_final['acao'] if comando_final else "CONTINUAR_EXPLORACAO"
+        
+        self._adicionar_log_tabela("Robô", mensagem_log, acao_log)
+        
+        return comando_final
+
+    def confirmar_registro_foto(self, foto_id, conteudo_foto):
+        """ (TERMINAL) Loga a confirmação da foto. """
+        print(f"[Central Automática] Confirmação recebida: Foto '{foto_id}' armazenada.")
+        self.log_missao.append({
+            'timestamp': datetime.datetime.now().isoformat(),
+            'confirmacao_foto': {'id': foto_id, 'dados': conteudo_foto}
+        })
+
+# --- EXECUÇÃO PRINCIPAL DA SIMULAÇÃO ---
 if __name__ == "__main__":
-    
-    # --- 4.1 Configuração da Missão ---
-    print("=======================================================")
-    print(" 🤖 BEM-VINDO AO SIMULADOR DE MISSÃO ROBOSOCO 3000 🤖")
-    print("=======================================================")
-    print("Escolha o cenário do desastre para a simulação:")
-    print("  1: Incêndio em Galpão Industrial (Foco em Fumaça/Calor/CO)")
-    print("  2: Incidente em Túnel de Metrô (Foco em Fumaça/Sem GPS)")
-    print("  3: Vazamento em Planta Química (Foco em Gás/Risco de Explosão)")
-    
-    cenario_map = {'1': 'incendio_galpao', '2': 'tunel_metro', '3': 'vazamento_quimico'}
-    escolha = input("Digite o número do cenário (1, 2 ou 3): ")
-    while escolha not in cenario_map:
-        print("Escolha inválida. Por favor, digite 1, 2 ou 3.")
-        escolha = input("Digite o número do cenário (1, 2 ou 3): ")
-    cenario_escolhido = cenario_map[escolha]
-    
-    # Suporte opcional a seed para reprodutibilidade (variável de ambiente)
-    seed_env = os.environ.get('ROBOSOCO_SEED')
-    if seed_env is not None:
-        try:
-            seed_val = int(seed_env)
-            print(f"[SEED] Usando seed fornecida em ROBOSOCO_SEED={seed_val}")
-            random.seed(seed_val)
-            np.random.seed(seed_val)
-        except Exception:
-            print("[SEED] Valor de ROBOSOCO_SEED inválido; ignorando.")
 
-    pontos_totais = 500
-    grid_largura_cenario = 50
-    
-    # --- 4.2 Treinamento da IA ---
-    # Treina o modelo de IA especificamente para o cenário que vamos rodar
-    modelo_ia, lista_features = treinar_modelo_ia(cenario_treino=cenario_escolhido)
+    # Criação dos componentes
+    # Agora o programa inicia diretamente com o cenário da Linha Amarela
+    cenario_tunel = Cenario(comprimento=500)
+    central = CentralDeControle()
+    robo = Robo(central_controle=central)
 
-    # --- 4.3 Geração do Mundo da Simulação ---
-    dados_completos = gerar_dados_de_cenario(cenario=cenario_escolhido, 
-                                             pontos_medidos=pontos_totais, 
-                                             grid_largura=grid_largura_cenario) 
-    
-    print("\n=======================================================")
-    print(f" 🛰️  INICIANDO MISSÃO: {cenario_escolhido.upper()} ")
-    print("  Processamento Otimizado (O(n)) e Visualização Ativados ")
-    print("=======================================================")
-
-    # --- 4.4 Configuração da Visualização (Gráfico) ---
-    plt.ion() # Ligar o MODO INTERATIVO
-    fig, ax = plt.subplots(figsize=(10, 8))
-    
-    # Preparar listas para guardar o histórico do caminho
-    mapa_x, mapa_y = [], []
-    mapa_vitimas_x, mapa_vitimas_y = [], []
-    
-    # Definir os limites do mapa
-    grid_altura = (pontos_totais // grid_largura_cenario) + 1
-    ax.set_xlim(0, grid_largura_cenario) 
-    ax.set_ylim(0, grid_altura)
-
-    # --- 4.5 Loop de Simulação em Tempo Real ---
-    historico_processado_lista = [] 
-    ponto_anterior = None
-
-    for i in range(pontos_totais):
-        
-        # 1. Pega o novo ponto como um DICIONÁRIO
-        novo_ponto_dict = dados_completos.iloc[i].to_dict()
-
-        try:
-            # 2. Processa SÓ O PONTO NOVO! (Passando a IA)
-            decisao_tempo_real = fusao_e_priorizacao_inteligente(modelo_ia, 
-                                                                 lista_features,
-                                                                 novo_ponto_dict, 
-                                                                 ponto_anterior)
-            
-            historico_processado_lista.append(decisao_tempo_real)
-            ponto_anterior = decisao_tempo_real.copy()
-
-        except Exception as e:
-            print(f"Erro de processamento no Ponto {i+1}: {e}")
-            continue
-            
-        # 3. Status da Vítima (Baseado na IA)
-        confianca_ia = decisao_tempo_real['Vitima_Confianca_Perc']
-        status_vitima = f"🚨 VÍTIMA (IA: {confianca_ia:.0f}%)" if decisao_tempo_real['Vitima_Detectada'] else f"Nenhuma Vítima (IA: {confianca_ia:.0f}%)"
-        
-        # 4. Apresentação em Tela (Terminal)
-        print("\n" + "-"*60)
-        print(f"PONTO {i+1:04d}/{pontos_totais} | SCORE: {decisao_tempo_real['Prioridade_Resgate']:.0f} | Bateria: {decisao_tempo_real['Bateria_Robo_Perc']:.1f}%")
-        print(f"  -> GPS: ({decisao_tempo_real['Latitude']:.6f}, {decisao_tempo_real['Longitude']:.6f}) | Local: (X:{decisao_tempo_real['Posicao_X']}, Y:{decisao_tempo_real['Posicao_Y']})")
-        print(f"  -> AMBIENTE: Temp: {decisao_tempo_real['Temp_C']:.1f}°C | CO2: {decisao_tempo_real['CO2_ppm']:.0f} | CO: {decisao_tempo_real['CO_ppm']:.0f} | Metano: {decisao_tempo_real['Metano_ppm']:.0f}")
-        print(f"  -> ROBÔ: Roll: {decisao_tempo_real['Angulacao_Roll_Graus']:.1f}° | Risco Previsto: {decisao_tempo_real['Risco_Previsto_Futuro']:.0f} | Custo Rota: {decisao_tempo_real['Custo_Rota']:.0f}")
-        print(f"  -> STATUS IA: {status_vitima}")
-        
-        # Print de Alerta
-        if decisao_tempo_real['Comando_Logistico'] != 'CONTINUAR EXPLORACAO':
-             print(f"  -> 🔥 COMANDO: >>> {decisao_tempo_real['Comando_Logistico']} <<<")
-        
-        # 5. Atualização da Visualização (Gráfico)
-        x_atual = decisao_tempo_real['Posicao_X']
-        y_atual = decisao_tempo_real['Posicao_Y']
-        mapa_x.append(x_atual)
-        mapa_y.append(y_atual)
-
-        ax.clear() # Limpa o mapa para redesenhar
-        
-        # Desenha o caminho percorrido (cinza)
-        ax.plot(mapa_x, mapa_y, '.-', color='gray', alpha=0.5, label='Caminho Percorrido')
-        
-        # Desenha a posição ATUAL (azul)
-        ax.plot(x_atual, y_atual, 'o', color='blue', markersize=10, label='Posição Atual Robô')
-
-        # Se a IA detectar vítima com alta confiança, marca no mapa
-        if decisao_tempo_real['Vitima_Detectada'] and decisao_tempo_real['Vitima_Confianca_Perc'] > 70:
-            mapa_vitimas_x.append(x_atual)
-            mapa_vitimas_y.append(y_atual)
-            
-        # Desenha TODAS as vítimas detectadas (vermelho)
-        if mapa_vitimas_x:
-            ax.plot(mapa_vitimas_x, mapa_vitimas_y, 'X', color='red', markersize=15, label='Vítima Detectada (IA)')
-        
-        # Re-setar os limites e legendas
-        ax.set_xlim(0, grid_largura_cenario) 
-        ax.set_ylim(0, grid_altura)
-        ax.set_title(f"MAPA DA MISSÃO: {cenario_escolhido.upper()} (Ponto {i+1}) | Bateria: {decisao_tempo_real['Bateria_Robo_Perc']:.0f}%")
-        ax.legend(loc='upper left')
-        
-        plt.pause(0.001) # Um 'sleep' gráfico muito rápido
-
-    # --- 4.6 Fim da Missão ---
-    plt.ioff() # Desliga o modo interativo
-    print("\n=======================================================")
-    print(" 🏁         MISSÃO ENCERRADA: ANÁLISE COMPLETA         🏁")
-    print("=======================================================")
-    
-    # Converte a lista de resultados em um DataFrame final
-    historico_processado_final = pd.DataFrame(historico_processado_lista)
-    comandos_criticos = historico_processado_final[historico_processado_final['Comando_Logistico'] != 'CONTINUAR EXPLORACAO']
-    
-    print(f"Total de Pontos Processados: {len(historico_processado_final)}")
-    print(f"Decisões Críticas (Resgate/Retorno/Risco): {len(comandos_criticos)}")
-    
-    # 7. EXPORTAÇÃO DOS DADOS PROCESSADOS
-    timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    nome_arquivo = f"relatorio_missao_robosoco_{cenario_escolhido}_{timestamp_str}.csv"
-    
-    try:
-        historico_processado_final.to_csv(nome_arquivo, index=False)
-        print(f"\n✅ EXPORTAÇÃO CONCLUÍDA: Dados salvos em '{nome_arquivo}'")
-    except Exception as e:
-        print(f"\n❌ ERRO ao exportar para CSV: {e}")
-
-    print("\nVisualização final do mapa da missão. Pode fechar a janela do gráfico.")
-    plt.show() # Mostra o gráfico final e pausa o script até você fechar
+    # Inicia a simulação (que vai abrir o gráfico e rodar no terminal)
+    central.iniciar_missao(robo, cenario_tunel)
